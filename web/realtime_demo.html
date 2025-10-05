@@ -1,139 +1,193 @@
 <!doctype html>
-<meta charset="utf-8" />
-<title>Realtime Voice Agent Demo</title>
-<style>
-    body {
-        font-family: system-ui, sans-serif;
-        max-width: 860px;
-        margin: 32px auto;
-    }
+<html>
 
-    button {
-        padding: 8px 14px;
-    }
+<head>
+    <meta charset="utf-8" />
+    <title>Realtime Voice Agent Demo</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 860px;
+            margin: 32px auto;
+        }
 
-    pre {
-        background: #f5f5f5;
-        padding: 12px;
-    }
-</style>
+        button {
+            padding: 8px 14px;
+            margin-right: 10px;
+        }
+
+        pre {
+            background: #f5f5f5;
+            padding: 12px;
+        }
+
+        input {
+            padding: 6px 8px;
+            width: 260px;
+        }
+
+        label {
+            display: inline-block;
+            width: 100px;
+        }
+    </style>
 </head>
 
 <body>
     <h1>Realtime Voice Agent Demo</h1>
     <p>
-        <button id="connect">Connect & Talk</button>
-        <button id="disconnect" disabled>Disconnect</button>
+        <button id="connect">🎙 Connect & Talk</button>
+        <button id="disconnect" disabled>❌ Disconnect</button>
     </p>
+    <div>
+        <label>名前</label>
+        <input id="userName" placeholder="お名前 (任意)" />
+    </div>
     <audio id="remoteAudio" autoplay></audio>
     <pre id="log"></pre>
+
     <script>
         const logEl = document.getElementById('log');
-        function log(...args) { logEl.textContent += args.join(' ') + "\n"; }
-
+        function log(...args) {
+            logEl.textContent += args.join(' ') + "\n";
+        }
 
         const btnConnect = document.getElementById('connect');
         const btnDisconnect = document.getElementById('disconnect');
         const remoteAudio = document.getElementById('remoteAudio');
-
+        const userName = document.getElementById('userName');
 
         let pc, dc, localStream;
 
         async function getClientSecret() {
             const r = await fetch('http://localhost:8000/realtime/token', {
-                method: 'POST', headers: { 'content-type': 'application/json' },
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ user_id: 'demo-user' })
             });
-            if (!r.ok) { throw new Error(await r.text()); }
+            if (!r.ok) {
+                throw new Error(await r.text());
+            }
             const data = await r.json();
-            return data.client_secret?.value; // sessions API の client_secret.value
+            return data.client_secret?.value;
         }
 
         async function connect() {
             btnConnect.disabled = true;
-            const token = await getClientSecret();
-            if (!token) { throw new Error('No ephemeral token'); }
 
+            const token = await getClientSecret();
+            if (!token) throw new Error("No ephemeral token");
 
             pc = new RTCPeerConnection();
             dc = pc.createDataChannel('oai-events');
+
             dc.onmessage = (ev) => {
                 try {
                     const msg = JSON.parse(ev.data);
-                    // ここでツール実行要求に応答（function_call）
-                    if (msg.type === 'response.function_call') { handleFunctionCall(msg); }
-                    if (msg.type === 'session.created') log('session created');
-                } catch (e) { /* noop */ }
+                    if (msg.type === 'response.function_call') handleFunctionCall(msg);
+                    if (msg.type === 'session.created') log('✅ Session created');
+                } catch (e) { }
             };
 
+            pc.ontrack = (e) => {
+                remoteAudio.srcObject = e.streams[0];
+            };
 
-            pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
-
+            for (const track of localStream.getTracks()) {
+                pc.addTrack(track, localStream);
+            }
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-
-            // Realtime (WebRTC over HTTPS SDP) — ephemeral token を Bearer に
             const model = 'gpt-4o-realtime-preview';
             const sdpRes = await fetch(`https://api.openai.com/v1/realtime?model=${model}`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/sdp' },
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/sdp'
+                },
                 body: offer.sdp,
             });
             const answerSdp = await sdpRes.text();
             await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-            btnDisconnect.disabled = true === false; // enable
-            log('Connected');
+
+            btnDisconnect.disabled = false;
+            log('🎤 Connected to model.');
         }
 
-
         async function handleFunctionCall(msg) {
-            // msg.item.id, msg.call_id, msg.name, msg.arguments
             const { call_id, name, arguments: args } = msg;
+
             try {
                 let toolOutput;
+
                 if (name === 'list_hospitals') {
                     const url = new URL('http://localhost:8000/hospitals');
                     url.searchParams.set('lat', String(args.lat));
                     url.searchParams.set('lon', String(args.lon));
-                    if (args.distance_km) url.searchParams.set('distance_km', String(args.distance_km));
+                    if (args.distance_km) {
+                        url.searchParams.set('distance_km', String(args.distance_km));
+                    }
                     toolOutput = await fetch(url).then(r => r.json());
+
                 } else if (name === 'create_visit') {
+                    const nameVal = userName.value || '匿名';
                     toolOutput = await fetch('http://localhost:8000/visit', {
-                        method: 'POST', headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({ hospital_id: args.hospital_id, slot: args.slot, name: args.name || '匿名' })
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({
+                            hospital_id: args.hospital_id,
+                            slot: args.slot,
+                            name: nameVal
+                        })
                     }).then(r => r.json());
+
                 } else if (name === 'diagnose') {
                     toolOutput = await fetch('http://localhost:8000/diagnose', {
-                        method: 'POST', headers: { 'content-type': 'application/json' },
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
                         body: JSON.stringify({ symptoms: args.symptoms })
                     }).then(r => r.json());
                 }
-                // 関数実行結果をモデルへ返信
+
                 dc.send(JSON.stringify({
                     type: 'response.function_call_output',
                     call_id,
                     output: toolOutput
                 }));
             } catch (err) {
-                dc.send(JSON.stringify({ type: 'response.function_call_output', call_id, error: String(err) }));
+                dc.send(JSON.stringify({
+                    type: 'response.function_call_output',
+                    call_id,
+                    error: String(err)
+                }));
             }
         }
 
-
         function disconnect() {
-            btnDisconnect.disabled = true; btnConnect.disabled = false;
-            if (dc) { dc.close(); dc = null; }
-            if (pc) { pc.close(); pc = null; }
-            if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-            log('Disconnected');
+            btnDisconnect.disabled = true;
+            btnConnect.disabled = false;
+
+            if (dc) {
+                dc.close(); dc = null;
+            }
+            if (pc) {
+                pc.close(); pc = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
+            log('❌ Disconnected.');
         }
 
+        btnConnect.onclick = () => connect().catch(e => {
+            log('ERR', e.message);
+            btnConnect.disabled = false;
+        });
 
-        btnConnect.onclick = () => connect().catch(e => { log('ERR', e.message); btnConnect.disabled = false; });
         btnDisconnect.onclick = () => disconnect();
     </script>
 </body>
